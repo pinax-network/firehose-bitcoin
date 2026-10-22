@@ -77,6 +77,8 @@ message Transaction {
 
   // The block time expressed in UNIX epoch time
   int64 blocktime = 12;
+  // The transaction fee in BTC, omitted if block undo data is not available
+  double fee = 13;
 
   // NON-DETERMINISTIC
   // The confirmations
@@ -99,6 +101,18 @@ message Vin {
   repeated string txinwitness = 5;
   // hex-encoded coinbase
   string coinbase = 6;
+  // The output spent by this input, only set with getblock verbosity 3 and omitted if block undo data is not available
+  Prevout prevout = 7;
+}
+
+message Prevout {
+  // Coinbase or not
+  bool generated = 1;
+  // The height of the prevout
+  int64 height = 2;
+  // The value in BTC
+  double value = 3;
+  ScriptPubKey script_pubKey = 4;
 }
 
 message Vout {
@@ -129,4 +143,6 @@ message ScriptPubKey {
   string address = 5;
   // bitcoin addresses (deprecated, empty when 'address' is set)
   repeated string addresses = 6;
+  // Inferred descriptor for the output
+  string desc = 7;
 }

@@ -27,6 +27,7 @@ func init() {
 	pollerCmd.Flags().Bool("ignore-cursor", false, "When enable it will ignore the cursor and start from the start block num, the cursor will still be saved as the poller progresses")
 	pollerCmd.Flags().Uint64("block-fetch-retry-count", 3, "The number of times to retry fetching a block before ending in error")
 	pollerCmd.Flags().Duration("head-block-wait-timeout", 30*time.Second, "How long a single waitforblockheight call may block on the node before it is retried")
+	pollerCmd.Flags().Int("getblock-verbosity", 2, "The getblock verbosity: 2, or 3 to include each input's prevout (requires Bitcoin Core 23.0+ and an unpruned node)")
 	pollerCmd.Flags().String("reader-state-storage-path", "/localdata/", "The local path where the reader state will be stored, if blank no state will be stored")
 	pollerCmd.Flags().StringSliceP("headers", "H", nil, "List of HTTP headers to pass with the request (ex: 'Authorization: Basic ...')")
 	pollerCmd.Flags().Duration("graceful-shutdown-delay", 0*time.Millisecond, "delay before shutting down, after the health endpoint returns unhealthy")
@@ -45,6 +46,7 @@ func readerRunE(cmd *cobra.Command, args []string) error {
 	unreadyPeriodDelay := sflags.MustGetDuration(cmd, "unready-period-delay")
 	ignoreCursor := sflags.MustGetBool(cmd, "ignore-cursor")
 	headBlockWaitTimeout := sflags.MustGetDuration(cmd, "head-block-wait-timeout")
+	getblockVerbosity := sflags.MustGetInt(cmd, "getblock-verbosity")
 
 	zlog.Info("launching firebtc reader",
 		zap.String("start_block_num", startBlockNumStr),
@@ -56,11 +58,16 @@ func readerRunE(cmd *cobra.Command, args []string) error {
 		zap.Duration("unready_period_delay", unreadyPeriodDelay),
 		zap.Bool("ignore_cursor", ignoreCursor),
 		zap.Duration("head_block_wait_timeout", headBlockWaitTimeout),
+		zap.Int("getblock_verbosity", getblockVerbosity),
 	)
 
 	startBlockNum, err := strconv.ParseUint(startBlockNumStr, 10, 64)
 	if err != nil {
 		return fmt.Errorf("unable to parse start block number %s: %w", startBlockNumStr, err)
+	}
+
+	if getblockVerbosity != 2 && getblockVerbosity != 3 {
+		return fmt.Errorf("invalid getblock verbosity %d: must be 2 or 3", getblockVerbosity)
 	}
 
 	headers, err := parseHeaders(headerStrings)
@@ -76,7 +83,7 @@ func readerRunE(cmd *cobra.Command, args []string) error {
 		rpcEndpoint = strings.TrimPrefix(rpcEndpoint, "http://")
 	}
 
-	p := fetch.New(rpcEndpoint, https, blockFetchRetryCount, readerStateStoragePath, startBlockNum, ignoreCursor, headBlockWaitTimeout, headers, zlog)
+	p := fetch.New(rpcEndpoint, https, blockFetchRetryCount, readerStateStoragePath, startBlockNum, ignoreCursor, headBlockWaitTimeout, getblockVerbosity, headers, zlog)
 	app := cli.NewApplication(ctx)
 	app.SuperviseAndStart(p)
 

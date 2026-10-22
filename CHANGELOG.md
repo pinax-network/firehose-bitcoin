@@ -4,6 +4,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). See [MAINTAINERS.md](./MAINTAINERS.md)
 for instructions to keep up to date.
 
+## Unreleased
+
+### Added
+
+* added flag `--getblock-verbosity` (default 2); 3 adds each input's spent output as `Vin.prevout` (requires Bitcoin Core 23.0+ and an unpruned node)
+* added `Transaction.fee` and `ScriptPubKey.desc`
+
+### Fixed
+
+* `Block.mediantime`, `Block.chainwork`, `ScriptPubKey.address`, `Transaction.blockhash` and `Transaction.blocktime` are now populated; they were always empty
+
 ## v1.1.1
 
 ### Fixed
