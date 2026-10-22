@@ -89,15 +89,16 @@ func (p *BlockFetcher) Run(ctx context.Context) error {
 		ExtraHeaders: p.headers,
 	}
 
-	client, err := rpcclient.New(connCfg, nil)
+	clients, rpcClients, err := newRPCClients(connCfg, p.blockFetchBatchSize, p.logger)
 	if err != nil {
-		return fmt.Errorf("failed to setup rpc client: %w", err)
+		return err
 	}
-	defer client.Shutdown()
-	p.rpcClient = client
-
-	clients := rpc.NewClients(maxBlockFetchDuration, rpc.NewStickyRollingStrategy[*rpcclient.Client](), p.logger)
-	clients.Add(client)
+	defer func() {
+		for _, client := range rpcClients {
+			client.Shutdown()
+		}
+	}()
+	p.rpcClient = rpcClients[0]
 
 	opts := []blockpoller.Option[*rpcclient.Client]{
 		blockpoller.WithLogger[*rpcclient.Client](p.logger),
@@ -280,4 +281,30 @@ func (p *BlockFetcher) Fetch(ctx context.Context, client *rpcclient.Client, blkN
 func getContentType() string {
 	blk := &pbbitcoin.Block{}
 	return "type.googleapis.com/" + string(blk.ProtoReflect().Descriptor().FullName())
+}
+
+// newRPCClients returns one client per parallel fetch: an rpcclient in HTTP POST mode sends one
+// request at a time, so a single client would serialize them. The spread start hands each
+// concurrent fetch a different client.
+func newRPCClients(connCfg *rpcclient.ConnConfig, blockFetchBatchSize int, logger *zap.Logger) (*rpc.Clients[*rpcclient.Client], []*rpcclient.Client, error) {
+	var rollingStrategy rpc.RollingStrategy[*rpcclient.Client] = rpc.NewStickyRollingStrategy[*rpcclient.Client]()
+	if blockFetchBatchSize > 1 {
+		rollingStrategy = rpc.NewRollingStrategySequential[*rpcclient.Client](rpc.WithSpreadStart())
+	}
+	clients := rpc.NewClients(maxBlockFetchDuration, rollingStrategy, logger)
+
+	var rpcClients []*rpcclient.Client
+	for i := 0; i < max(blockFetchBatchSize, 1); i++ {
+		client, err := rpcclient.New(connCfg, nil)
+		if err != nil {
+			for _, c := range rpcClients {
+				c.Shutdown()
+			}
+			return nil, nil, fmt.Errorf("failed to setup rpc client: %w", err)
+		}
+		rpcClients = append(rpcClients, client)
+		clients.AddNamed(client, fmt.Sprintf("rpc-%d", i))
+	}
+
+	return clients, rpcClients, nil
 }

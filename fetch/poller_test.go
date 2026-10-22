@@ -1,18 +1,22 @@
 package fetch
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/btcsuite/btcd/rpcclient"
+	"github.com/streamingfast/firehose-core/rpc"
 	"github.com/test-go/testify/require"
 )
 
@@ -139,4 +143,70 @@ func TestAwaitBlockHeightFallsBack(t *testing.T) {
 			require.Equal(t, []string{"waitforblockheight", "getbestblockhash"}, methods)
 		})
 	}
+}
+
+// Parallel fetches must reach the node concurrently: an rpcclient in HTTP POST mode sends one
+// request at a time, so a batch of N needs N clients.
+func TestNewRPCClientsFetchConcurrently(t *testing.T) {
+	const batchSize = 4
+
+	var inFlight, maxInFlight atomic.Int32
+	var releaseOnce sync.Once
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID json.RawMessage `json:"id"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+
+		n := inFlight.Add(1)
+		for {
+			m := maxInFlight.Load()
+			if n <= m || maxInFlight.CompareAndSwap(m, n) {
+				break
+			}
+		}
+		if n == batchSize {
+			releaseOnce.Do(func() { close(release) })
+		}
+		// Hold each request until the whole batch is in flight, or give up if it never is.
+		select {
+		case <-release:
+		case <-time.After(2 * time.Second):
+		}
+		inFlight.Add(-1)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"result":"ok","error":null,"id":%s}`, req.ID)
+	}))
+	defer srv.Close()
+
+	clients, rpcClients, err := newRPCClients(&rpcclient.ConnConfig{
+		Host:         strings.TrimPrefix(srv.URL, "http://"),
+		DisableAuth:  true,
+		HTTPPostMode: true,
+		DisableTLS:   true,
+	}, batchSize, zap.NewNop())
+	require.NoError(t, err)
+	defer func() {
+		for _, c := range rpcClients {
+			c.Shutdown()
+		}
+	}()
+	require.Len(t, rpcClients, batchSize)
+
+	var wg sync.WaitGroup
+	for i := 0; i < batchSize; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := rpc.WithClients(clients, func(ctx context.Context, client *rpcclient.Client) (json.RawMessage, error) {
+				return client.RawRequest("getblockcount", nil)
+			})
+			require.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+
+	require.Equal(t, int32(batchSize), maxInFlight.Load(), "fetches were serialized")
 }
