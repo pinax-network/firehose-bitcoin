@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/btcsuite/btcd/rpcclient"
@@ -26,14 +27,17 @@ type BlockFetcher struct {
 	*shutter.Shutter
 	endpoint             string
 	blockFetchRetryCount uint64
+	blockFetchBatchSize  int
 	stateStoragePath     string
 	startBlockNum        uint64
 	ignoreCursor         bool
 	headBlockWaitTimeout time.Duration
 	getblockVerbosity    int
-	headBlock            bstream.BlockRef
-	rpcClient            *rpcclient.Client
-	logger               *zap.Logger
+	// headBlock is shared by the concurrent fetches when blockFetchBatchSize > 1
+	headBlockLock sync.RWMutex
+	headBlock     bstream.BlockRef
+	rpcClient     *rpcclient.Client
+	logger        *zap.Logger
 
 	headers    map[string]string
 	disableTLS bool
@@ -43,6 +47,7 @@ func New(
 	endpoint string,
 	https bool,
 	blockFetchRetryCount uint64,
+	blockFetchBatchSize int,
 	stateStoragePath string,
 	startBlockNum uint64,
 	ignoreCursor bool,
@@ -54,6 +59,7 @@ func New(
 		Shutter:              shutter.New(),
 		endpoint:             endpoint,
 		blockFetchRetryCount: blockFetchRetryCount,
+		blockFetchBatchSize:  blockFetchBatchSize,
 		stateStoragePath:     stateStoragePath,
 		startBlockNum:        startBlockNum,
 		ignoreCursor:         ignoreCursor,
@@ -72,6 +78,7 @@ func (p *BlockFetcher) Run(ctx context.Context) error {
 		zap.String("content", contentType),
 		zap.Uint64("start_block_num", p.startBlockNum),
 		zap.Int("getblock_verbosity", p.getblockVerbosity),
+		zap.Int("block_fetch_batch_size", p.blockFetchBatchSize),
 	)
 
 	connCfg := &rpcclient.ConnConfig{
@@ -108,21 +115,22 @@ func (p *BlockFetcher) Run(ctx context.Context) error {
 		bp.Shutdown(nil)
 	})
 
-	p.headBlock, err = p.GetHeadBlock()
+	headBlock, err := p.GetHeadBlock()
 	if err != nil {
 		return fmt.Errorf("failed to get head block: %w", err)
 	}
+	p.setKnownHeadBlock(headBlock)
 
-	finalizedBlk, err := p.GetFinalizedBlock(p.headBlock)
+	finalizedBlk, err := p.GetFinalizedBlock(headBlock)
 	if err != nil {
 		return fmt.Errorf("failed to get finalized block: %w", err)
 	}
 	p.logger.Info("retrieved finalized and head block",
 		zap.Stringer("finalized_block", finalizedBlk),
-		zap.Stringer("chain_head_block", p.headBlock),
+		zap.Stringer("chain_head_block", headBlock),
 	)
 
-	return bp.Run(p.startBlockNum, nil, 1)
+	return bp.Run(p.startBlockNum, nil, p.blockFetchBatchSize)
 }
 
 func (p *BlockFetcher) GetFinalizedBlock(headBlock bstream.BlockRef) (bstream.BlockRef, error) {
@@ -206,18 +214,30 @@ func (p *BlockFetcher) waitForBlockHeight(height uint64) (bstream.BlockRef, erro
 	return bstream.NewBlockRef(result.Hash, result.Height), nil
 }
 
+func (p *BlockFetcher) knownHeadBlock() bstream.BlockRef {
+	p.headBlockLock.RLock()
+	defer p.headBlockLock.RUnlock()
+	return p.headBlock
+}
+
+func (p *BlockFetcher) setKnownHeadBlock(headBlock bstream.BlockRef) {
+	p.headBlockLock.Lock()
+	defer p.headBlockLock.Unlock()
+	p.headBlock = headBlock
+}
+
 func (p *BlockFetcher) IsBlockAvailable(requestedSlot uint64) bool {
-	return requestedSlot <= p.headBlock.Num()
+	return requestedSlot <= p.knownHeadBlock().Num()
 }
 
 func (p *BlockFetcher) Fetch(ctx context.Context, client *rpcclient.Client, blkNum uint64) (*pbbstream.Block, bool, error) {
-	for p.headBlock.Num() < blkNum {
+	for p.knownHeadBlock().Num() < blkNum {
 		if err := ctx.Err(); err != nil {
 			return nil, false, err
 		}
 
 		p.logger.Debug("head block is behind, waiting for it to catch up",
-			zap.Stringer("head_block", p.headBlock),
+			zap.Stringer("head_block", p.knownHeadBlock()),
 			zap.Uint64("block_num", blkNum),
 			zap.Duration("wait_timeout", p.headBlockWaitTimeout),
 		)
@@ -226,7 +246,7 @@ func (p *BlockFetcher) Fetch(ctx context.Context, client *rpcclient.Client, blkN
 		if err != nil {
 			return nil, false, err
 		}
-		p.headBlock = headBlock
+		p.setKnownHeadBlock(headBlock)
 	}
 
 	p.logger.Debug("fetching block", zap.Uint64("block_num", blkNum))
