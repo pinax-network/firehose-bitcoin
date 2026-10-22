@@ -12,6 +12,10 @@ for instructions to keep up to date.
 * added `Transaction.fee` and `ScriptPubKey.desc`
 * added flag `--block-fetch-batch-size` (default 1) to fetch blocks in parallel while catching up; blocks are still emitted in order
 
+### Changed
+
+* bumped `firehose-core` to v1.21.1, which requires Go 1.27 to build: the poller prints each `FIRE BLOCK` line 11-15x faster (reused buffer, SIMD base64), logs its per-block lines at `Debug` instead of `Info`, and no longer warns `no clients have been working for over 1 minute` between slow blocks
+
 ### Fixed
 
 * `Block.mediantime`, `Block.chainwork`, `ScriptPubKey.address`, `Transaction.blockhash` and `Transaction.blocktime` are now populated; they were always empty
