@@ -139,7 +139,11 @@ func (p *BlockFetcher) GetFinalizedBlock(headBlock bstream.BlockRef) (bstream.Bl
 }
 
 func (p *BlockFetcher) getFinalizedBlock(client *rpcclient.Client, headBlock bstream.BlockRef) (bstream.BlockRef, error) {
-	finalizedBlockNum := int64(headBlock.Num() - pbbitcoin.LibOffset)
+	// a chain shorter than LibOffset (a new regtest chain) has only its genesis block final
+	finalizedBlockNum := int64(0)
+	if headBlock.Num() > pbbitcoin.LibOffset {
+		finalizedBlockNum = int64(headBlock.Num() - pbbitcoin.LibOffset)
+	}
 	finalizedBlockHash, err := client.GetBlockHash(finalizedBlockNum)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get finalized block hash: %w", err)

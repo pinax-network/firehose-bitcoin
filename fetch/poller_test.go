@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/btcsuite/btcd/rpcclient"
+	"github.com/streamingfast/bstream"
 	"github.com/streamingfast/firehose-core/rpc"
 	"github.com/test-go/testify/require"
 )
@@ -209,4 +210,42 @@ func TestNewRPCClientsFetchConcurrently(t *testing.T) {
 	wg.Wait()
 
 	require.Equal(t, int32(batchSize), maxInFlight.Load(), "fetches were serialized")
+}
+
+// A chain shorter than LibOffset has its genesis block final, instead of asking for a block below 0.
+func TestFinalizedBlockOfShortChain(t *testing.T) {
+	var heights []int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params []int64         `json:"params"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.Equal(t, "getblockhash", req.Method)
+		heights = append(heights, req.Params[0])
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"result":"0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206","error":null,"id":%s}`, req.ID)
+	}))
+	defer srv.Close()
+
+	client, err := rpcclient.New(&rpcclient.ConnConfig{
+		Host:         strings.TrimPrefix(srv.URL, "http://"),
+		DisableAuth:  true,
+		HTTPPostMode: true,
+		DisableTLS:   true,
+	}, nil)
+	require.NoError(t, err)
+
+	r := &BlockFetcher{rpcClient: client, logger: zap.NewNop()}
+	for _, head := range []uint64{0, 3, 6, 10} {
+		finalized, err := r.GetFinalizedBlock(bstream.NewBlockRef("head", head))
+		require.NoError(t, err)
+		expected := uint64(0)
+		if head > 6 {
+			expected = head - 6
+		}
+		require.Equal(t, expected, finalized.Num(), "head %d", head)
+	}
+	require.Equal(t, []int64{0, 0, 0, 4}, heights)
 }

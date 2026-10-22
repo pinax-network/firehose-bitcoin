@@ -19,6 +19,7 @@ for instructions to keep up to date.
 
 ### Fixed
 
+* the poller no longer exits at start on a chain shorter than 6 blocks (a new regtest chain), where it asked for the finalized block below height 0; genesis is final until then
 * `Block.mediantime`, `Block.chainwork`, `ScriptPubKey.address`, `Transaction.blockhash` and `Transaction.blocktime` are now populated; they were always empty
 
 ## v1.1.1
