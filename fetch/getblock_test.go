@@ -3,7 +3,6 @@ package fetch
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -113,25 +112,5 @@ func TestGetBlockVerbosity3Live(t *testing.T) {
 
 func requireFeeMatchesPrevouts(t *testing.T, blk *pbbitcoin.Block) {
 	t.Helper()
-
-	for i, tx := range blk.Tx {
-		if i == 0 {
-			require.Nil(t, tx.Vin[0].Prevout, "coinbase input has no prevout")
-			continue
-		}
-
-		var in, out int64
-		for _, vin := range tx.Vin {
-			require.NotNil(t, vin.Prevout, "tx %s input %s:%d has no prevout", tx.Txid, vin.Txid, vin.Vout)
-			in += sats(vin.Prevout.Value)
-		}
-		for _, vout := range tx.Vout {
-			out += sats(vout.Value)
-		}
-		require.Equal(t, sats(tx.Fee), in-out, "tx %s fee", tx.Txid)
-	}
-}
-
-func sats(btc float64) int64 {
-	return int64(math.Round(btc * 1e8))
+	require.NoError(t, CheckFees(blk))
 }

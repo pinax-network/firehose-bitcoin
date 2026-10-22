@@ -10,6 +10,7 @@ for instructions to keep up to date.
 
 * added flag `--getblock-verbosity` (default 2); 3 adds each input's spent output as `Vin.prevout` (requires Bitcoin Core 23.0+ and an unpruned node)
 * added `Transaction.fee` and `ScriptPubKey.desc`
+* added `firebtc tools compare-blocks-rpc <firehose-endpoint> <rpc-endpoint> <start> <stop>`: compares final Firehose blocks with the node's `getblock`, block by block, and checks each transaction's prevouts against its fee
 * added flag `--block-fetch-batch-size` (default 1) to fetch blocks in parallel while catching up; blocks are still emitted in order. The poller opens one RPC client per parallel fetch, since an `rpcclient` in HTTP POST mode sends one request at a time
 
 ### Changed
